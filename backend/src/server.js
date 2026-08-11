@@ -23,7 +23,9 @@ async function shutdown(reason, exitCode = 0, error) {
   isShuttingDown = true;
 
   console.log(`Encerrando aplicação: ${reason}.`);
-  if (error) console.error(error);
+  if (error) {
+    console.error(`Erro fatal não tratado (${error.name ?? 'Error'}).`);
+  }
 
   try {
     await closeResources();

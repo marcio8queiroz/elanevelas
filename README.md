@@ -5,7 +5,7 @@ API do projeto Elane Velas, desenvolvida com Node.js, Express e MongoDB.
 ## Requisitos
 
 - Node.js 20 ou superior
-- MongoDB local ou uma instância MongoDB Atlas
+- Docker com Docker Compose
 
 ## Instalação
 
@@ -17,6 +17,16 @@ cp .env.example .env
 Edite o arquivo `.env` caso a conexão do MongoDB ou a porta sejam diferentes do exemplo.
 
 ## Execução
+
+Inicie primeiro o MongoDB em container:
+
+```bash
+npm run docker:mongo:up
+```
+
+O backend continua sendo executado diretamente na máquina host e se conecta ao
+MongoDB em `127.0.0.1:27017`. O volume nomeado `mongodb_data` mantém os dados entre
+reinicializações do container.
 
 Para desenvolvimento, com reinicialização automática:
 
@@ -34,6 +44,13 @@ A API estará disponível em `http://localhost:3000`. O endpoint de verificaçã
 
 ```text
 GET /api/v1/health
+```
+
+Para acompanhar os logs do banco ou encerrar os containers:
+
+```bash
+npm run docker:mongo:logs
+npm run docker:mongo:down
 ```
 
 ## Verificação

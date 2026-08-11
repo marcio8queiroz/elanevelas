@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node backend/src/server.js",
     "dev": "nodemon backend/src/server.js",
-    "check": "node --check backend/src/server.js && node --check backend/src/app.js"
+    "check": "node --check backend/src/server.js && node --check backend/src/app.js",
+    "docker:mongo:up": "docker compose up -d mongodb",
+    "docker:mongo:down": "docker compose down",
+    "docker:mongo:logs": "docker compose logs -f mongodb"
   },
   "keywords": [],
   "author": "",

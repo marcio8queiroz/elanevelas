@@ -116,6 +116,68 @@ do endpoint de refresh rotaciona o token, invalidando o anterior. Senhas e
 refresh tokens são armazenados somente como hashes, e respostas nunca incluem
 hashes, CPF ou campos internos de token.
 
+## Carrinho e lista de desejos
+
+Todos os endpoints abaixo exigem `Authorization: Bearer <access-token>` e só
+acessam os dados do próprio usuário autenticado.
+
+| Método | Endpoint | Operação |
+| --- | --- | --- |
+| `GET` | `/api/v1/cart` | Consultar o carrinho |
+| `POST` | `/api/v1/cart/items` | Adicionar unidades de um produto |
+| `PATCH` | `/api/v1/cart/items/:productId` | Definir a quantidade absoluta |
+| `DELETE` | `/api/v1/cart/items/:productId` | Remover um item |
+| `DELETE` | `/api/v1/cart` | Esvaziar o carrinho |
+| `GET` | `/api/v1/wishlist` | Consultar a lista de desejos |
+| `POST` | `/api/v1/wishlist/items` | Adicionar um produto |
+| `DELETE` | `/api/v1/wishlist/items/:productId` | Remover um produto |
+| `DELETE` | `/api/v1/wishlist` | Esvaziar a lista |
+
+Exemplos:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/cart/items \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"productId":"64b000000000000000000001","quantity":2}'
+
+curl -X PATCH http://localhost:3000/api/v1/cart/items/64b000000000000000000001 \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"quantity":3}'
+
+curl -X POST http://localhost:3000/api/v1/wishlist/items \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"productId":"64b000000000000000000001"}'
+```
+
+No carrinho, `quantity` deve ser um número inteiro maior que zero e não pode
+ultrapassar o estoque atual. Um novo `POST` para o mesmo produto soma a
+quantidade enviada; `PATCH` substitui pela quantidade informada. Essas somas são
+atômicas no documento do usuário para impedir itens duplicados e atualizações
+perdidas. O retorno inclui `items`, `distinctItemCount`, `totalQuantity`,
+`subtotal` e `updatedAt`. O subtotal usa `promotionalPrice` quando não é `null`;
+caso contrário usa `price`, sempre consultados no banco.
+
+Produtos removidos, inativos, sem estoque ou cuja quantidade passou a exceder o
+estoque permanecem no carrinho, são marcados como indisponíveis por
+`unavailableReason` e não entram no subtotal. Assim o cliente pode informar o
+usuário sem perder silenciosamente sua seleção. A remoção de item e o
+esvaziamento são idempotentes e retornam HTTP 204 mesmo se o item já não estiver
+presente.
+
+Na lista de desejos, adicionar novamente o mesmo produto é idempotente e não
+cria duplicata. Produtos que depois forem removidos ou inativados são omitidos
+da consulta, sem provocar erro; as operações de remoção continuam idempotentes.
+As respostas de ambas as APIs usam somente campos públicos do produto e nunca
+incluem o documento completo do usuário.
+
+Entradas inválidas retornam HTTP 400, autenticação ausente, inválida ou de
+usuário inativo retorna HTTP 401, e tentativa de adicionar/atualizar produto
+inexistente ou inativo retorna HTTP 404. Adições bem-sucedidas retornam HTTP
+201, consultas e atualizações retornam HTTP 200, e exclusões retornam HTTP 204.
+
 ## Variáveis de ambiente
 
 | Variável | Descrição | Exemplo |

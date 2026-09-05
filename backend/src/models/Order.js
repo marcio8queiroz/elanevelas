@@ -1,167 +1,68 @@
-import mongoose from "mongoose";
+import mongoose from 'mongoose';
 
-const orderItemSchema = new mongoose.Schema(
-  {
-    product: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-      required: true,
-    },
+export const ORDER_STATUSES = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
+export const PAYMENT_STATUSES = ['pending', 'paid', 'failed', 'refunded'];
+export const PAYMENT_METHODS = ['pix', 'credit_card', 'boleto'];
 
-    sku: {
-      type: String,
-      required: true,
-    },
+const orderItemSchema = new mongoose.Schema({
+  product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  sku: { type: String, required: true },
+  name: { type: String, required: true },
+  imageUrl: String,
+  quantity: { type: Number, required: true, min: 1 },
+  unitPriceInCents: { type: Number, required: true, min: 0 },
+  totalInCents: { type: Number, required: true, min: 0 },
+}, { _id: false });
 
-    name: {
-      type: String,
-      required: true,
-    },
+const shippingAddressSchema = new mongoose.Schema({
+  recipientName: { type: String, required: true },
+  zipCode: { type: String, required: true },
+  street: { type: String, required: true },
+  number: { type: String, required: true },
+  complement: String,
+  neighborhood: { type: String, required: true },
+  city: { type: String, required: true },
+  state: { type: String, required: true },
+}, { _id: false });
 
-    imageUrl: String,
+const statusHistorySchema = new mongoose.Schema({
+  type: { type: String, enum: ['order', 'payment'], required: true },
+  status: { type: String, required: true },
+  description: String,
+  changedAt: { type: Date, default: Date.now },
+}, { _id: false });
 
-    quantity: {
-      type: Number,
-      required: true,
-      min: 1,
-    },
-
-    unitPriceInCents: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    totalInCents: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+const orderSchema = new mongoose.Schema({
+  orderNumber: { type: String, required: true, unique: true, index: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  items: {
+    type: [orderItemSchema], required: true,
+    validate: [(items) => items.length > 0, 'O pedido deve possuir itens.'],
   },
-  { _id: false }
-);
-
-const shippingAddressSchema = new mongoose.Schema(
-  {
-    recipientName: String,
-    zipCode: String,
-    street: String,
-    number: String,
-    complement: String,
-    neighborhood: String,
-    city: String,
-    state: String,
+  subtotalInCents: { type: Number, required: true, min: 0 },
+  discountInCents: { type: Number, default: 0, min: 0 },
+  shippingInCents: { type: Number, required: true, min: 0 },
+  totalInCents: { type: Number, required: true, min: 0 },
+  shippingAddress: { type: shippingAddressSchema, required: true },
+  shipping: { provider: String, service: String, estimatedDays: Number, trackingCode: String },
+  status: { type: String, enum: ORDER_STATUSES, default: 'pending', index: true },
+  paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
+  paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: 'pending', index: true },
+  payment: {
+    provider: { type: String, enum: ['mercado_pago', 'pagarme'] },
+    method: String,
+    externalPaymentId: String,
+    status: String,
+    paidAt: Date,
+    transactionAmountInCents: Number,
   },
-  { _id: false }
-);
-
-const orderSchema = new mongoose.Schema(
-  {
-    orderNumber: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
-
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      index: true,
-    },
-
-    items: {
-      type: [orderItemSchema],
-      required: true,
-    },
-
-    subtotalInCents: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    discountInCents: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    shippingInCents: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    totalInCents: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
-    shippingAddress: {
-      type: shippingAddressSchema,
-      required: true,
-    },
-
-    shipping: {
-      provider: String,
-      service: String,
-      estimatedDays: Number,
-      trackingCode: String,
-    },
-
-    status: {
-      type: String,
-      enum: [
-        "pending_payment",
-        "paid",
-        "processing",
-        "shipped",
-        "delivered",
-        "cancelled",
-        "refunded",
-      ],
-      default: "pending_payment",
-      index: true,
-    },
-
-    payment: {
-      provider: {
-        type: String,
-        enum: ["mercado_pago", "pagarme"],
-      },
-      method: String,
-      externalPaymentId: String,
-      status: String,
-      paidAt: Date,
-      transactionAmountInCents: Number,
-    },
-
-    statusHistory: [
-      {
-        status: String,
-        description: String,
-        changedAt: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
-
-    customerNotes: {
-      type: String,
-      maxlength: 500,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
+  statusHistory: { type: [statusHistorySchema], default: [] },
+  customerNotes: { type: String, maxlength: 500 },
+}, { timestamps: true });
 
 orderSchema.index({ user: 1, createdAt: -1 });
 orderSchema.index({ status: 1, createdAt: -1 });
-orderSchema.index({ "payment.externalPaymentId": 1 });
+orderSchema.index({ paymentStatus: 1, createdAt: -1 });
+orderSchema.index({ 'payment.externalPaymentId': 1 }, { sparse: true });
 
-export default mongoose.model("Order", orderSchema);
+export default mongoose.model('Order', orderSchema);

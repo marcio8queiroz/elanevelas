@@ -178,6 +178,115 @@ usuário inativo retorna HTTP 401, e tentativa de adicionar/atualizar produto
 inexistente ou inativo retorna HTTP 404. Adições bem-sucedidas retornam HTTP
 201, consultas e atualizações retornam HTTP 200, e exclusões retornam HTTP 204.
 
+## Pedidos
+
+Todos os endpoints exigem `Authorization: Bearer <access-token>`. Clientes só
+enxergam seus próprios pedidos; uma tentativa de consultar o pedido de outro
+cliente retorna HTTP 404, da mesma forma que um pedido inexistente. As rotas
+administrativas também exigem o papel `admin` (caso contrário, HTTP 403).
+
+| Método | Endpoint | Operação |
+| --- | --- | --- |
+| `POST` | `/api/v1/orders` | Criar um pedido a partir do carrinho atual |
+| `GET` | `/api/v1/orders` | Listar os próprios pedidos |
+| `GET` | `/api/v1/orders/:orderId` | Consultar um pedido próprio pelo ObjectId |
+| `GET` | `/api/v1/admin/orders` | Listar todos os pedidos |
+| `GET` | `/api/v1/admin/orders/:orderId` | Consultar qualquer pedido |
+| `PATCH` | `/api/v1/admin/orders/:orderId/status` | Atualizar o estado do pedido |
+| `PATCH` | `/api/v1/admin/orders/:orderId/payment-status` | Atualizar o estado do pagamento |
+
+A criação recebe somente um endereço de entrega e um método de pagamento
+simulado. O endereço é estrito, todos os campos abaixo são obrigatórios exceto
+`complement`, `state` tem duas letras e o CEP aceita `00000000` ou `00000-000`.
+Não envie dados reais de cartão.
+
+```bash
+curl -X POST http://localhost:3000/api/v1/orders \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "shippingAddress": {
+      "recipientName": "Maria da Silva",
+      "zipCode": "69000-000",
+      "street": "Rua das Velas",
+      "number": "10",
+      "complement": "Casa",
+      "neighborhood": "Centro",
+      "city": "Manaus",
+      "state": "AM"
+    },
+    "paymentMethod": "pix"
+  }'
+
+curl -H 'Authorization: Bearer <access-token>' \
+  'http://localhost:3000/api/v1/orders?page=1&limit=10&status=pending&sort=-createdAt'
+
+curl -H 'Authorization: Bearer <access-token>' \
+  http://localhost:3000/api/v1/orders/64b000000000000000000001
+```
+
+`paymentMethod` aceita somente `pix`, `credit_card` ou `boleto`. Itens, usuário,
+preços, totais e estados enviados pelo cliente são rejeitados. O servidor
+recarrega os produtos, verifica existência, atividade e estoque e usa o preço
+promocional quando presente. O pedido guarda snapshots do nome, SKU, imagem
+principal, preço, quantidade e endereço, de modo que seu histórico não dependa
+de consultas futuras aos produtos. Valores são persistidos em centavos e
+expostos como números na unidade monetária. Nesta etapa `shippingAmount` e
+`discountAmount` são zero e `total = subtotal + shippingAmount - discountAmount`.
+
+O número público tem o formato `EV-` seguido de 18 caracteres hexadecimais
+aleatórios, não sequenciais. Um pedido começa com `status: pending` e
+`paymentStatus: pending`, e cada mudança fica em `statusHistory`. Após sucesso,
+o carrinho é esvaziado e seu `updatedAt` é atualizado. Após qualquer falha, o
+carrinho é preservado e nenhum pedido ou baixa parcial de estoque permanece.
+Não foi adicionada chave de idempotência nesta etapa: repetir uma criação já
+concluída encontra o carrinho vazio e retorna HTTP 400, sem criar duplicata.
+
+### Concorrência e consistência
+
+Os testes usam um MongoDB standalone em memória, que não oferece transações. A
+criação faz reservas condicionais e atômicas (`stock >= quantity`) em cada
+produto. Se uma reserva posterior, a criação do pedido ou a limpeza condicional
+do carrinho falhar, todas as reservas anteriores são compensadas e um pedido já
+criado é removido. Assim, pedidos concorrentes não vendem acima do estoque e
+uma alteração concorrente do carrinho não é apagada silenciosamente. Um conflito
+detectado durante essas operações retorna HTTP 409.
+
+### Listagem, respostas e estados
+
+As listagens aceitam `page`, `limit` (máximo 100), `status`, `paymentStatus` e
+`sort`, limitado a `createdAt` e `total` (prefixe com `-` para ordem
+decrescente). A listagem administrativa também aceita `user` (ObjectId),
+`orderNumber`, `from` e `to` (datas válidas). Queries e corpos desconhecidos são
+rejeitados. Resumos não carregam produtos nem o documento completo do usuário;
+detalhes administrativos incluem somente `id`, `name` e `email` do cliente.
+
+Estados do pedido: `pending`, `confirmed`, `processing`, `shipped`, `delivered`
+e `cancelled`. Transições permitidas:
+
+- `pending` → `confirmed` ou `cancelled`;
+- `confirmed` → `processing` ou `cancelled`;
+- `processing` → `shipped` ou `cancelled`;
+- `shipped` → `delivered`;
+- `delivered` e `cancelled` são finais.
+
+Estados de pagamento: `pending`, `paid`, `failed` e `refunded`. Transições:
+
+- `pending` → `paid` ou `failed`;
+- `failed` → `pending` (nova tentativa simulada);
+- `paid` → `refunded`;
+- `refunded` é final.
+
+Enviar novamente o estado atual é idempotente e não duplica o histórico.
+Transições ou estados inválidos retornam HTTP 400. Cancelar não restaura estoque
+nesta etapa; a baixa acontece somente na criação e nunca em mudanças
+administrativas de estado.
+
+Não há integração real com gateway de pagamento, dados de cartão,
+transportadora, cálculo de frete, cupons, devoluções, reembolsos financeiros ou
+cancelamento automático. Os estados de pagamento e reembolso são apenas
+registros administrativos preparados para integrações futuras.
+
 ## Variáveis de ambiente
 
 | Variável | Descrição | Exemplo |

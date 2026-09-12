@@ -93,6 +93,7 @@ const userSchema = new mongoose.Schema(
     ],
 
     cart: {
+      revision: { type: Number, default: 0 },
       items: {
         type: [cartItemSchema],
         default: [],

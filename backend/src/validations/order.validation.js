@@ -16,6 +16,8 @@ const shippingAddress = z.object({
 
 export const createOrderSchema = z.object({
   shippingAddress,
+  shippingQuoteId: z.string().regex(/^[a-f0-9]{48}$/),
+  shippingServiceId: z.string().regex(/^\d{1,20}$/),
   paymentMethod: z.enum(PAYMENT_METHODS),
 }).strict();
 

@@ -195,97 +195,280 @@ administrativas também exigem o papel `admin` (caso contrário, HTTP 403).
 | `PATCH` | `/api/v1/admin/orders/:orderId/status` | Atualizar o estado do pedido |
 | `PATCH` | `/api/v1/admin/orders/:orderId/payment-status` | Atualizar o estado do pagamento |
 
-A criação recebe somente um endereço de entrega e um método de pagamento
-simulado. O endereço é estrito, todos os campos abaixo são obrigatórios exceto
-`complement`, `state` tem duas letras e o CEP aceita `00000000` ou `00000-000`.
-Não envie dados reais de cartão.
+A criação exige endereço, método e seleção de uma cotação emitida pelo servidor.
+Pedidos anteriores continuam consultáveis; novos pedidos exigem o fluxo abaixo.
 
-```bash
-curl -X POST http://localhost:3000/api/v1/orders \
-  -H 'Authorization: Bearer <access-token>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "shippingAddress": {
-      "recipientName": "Maria da Silva",
-      "zipCode": "69000-000",
-      "street": "Rua das Velas",
-      "number": "10",
-      "complement": "Casa",
-      "neighborhood": "Centro",
-      "city": "Manaus",
-      "state": "AM"
-    },
-    "paymentMethod": "pix"
-  }'
+### Frete, pedido e pagamento (sandbox)
 
-curl -H 'Authorization: Bearer <access-token>' \
-  'http://localhost:3000/api/v1/orders?page=1&limit=10&status=pending&sort=-createdAt'
+1. Adicione os produtos ao carrinho autenticado.
+2. Solicite `POST /api/v1/shipping/quotes` com os mesmos itens e quantidades.
+3. Escolha uma opção e envie `shippingQuoteId` e `shippingServiceId` no `POST /api/v1/orders`.
+4. Depois do HTTP 201, inicie `POST /api/v1/orders/:orderId/payments`.
+5. Consulte `GET /api/v1/orders/:orderId/payments`; webhooks atualizam o estado local.
 
-curl -H 'Authorization: Bearer <access-token>' \
-  http://localhost:3000/api/v1/orders/64b000000000000000000001
+Todas essas rotas exigem access token e acessam somente o dono do pedido,
+inclusive quando o solicitante é administrador. Pedido alheio ou inexistente
+retorna 404. O webhook público é `POST /api/v1/webhooks/mercado-pago`.
+
+Exemplo de cotação (substitua o ObjectId pelo produto do carrinho):
+
+```json
+{
+  "destinationZipCode": "69000000",
+  "items": [{ "productId": "64b000000000000000000001", "quantity": 2 }]
+}
 ```
 
-`paymentMethod` aceita somente `pix`, `credit_card` ou `boleto`. Itens, usuário,
-preços, totais e estados enviados pelo cliente são rejeitados. O servidor
-recarrega os produtos, verifica existência, atividade e estoque e usa o preço
-promocional quando presente. O pedido guarda snapshots do nome, SKU, imagem
-principal, preço, quantidade e endereço, de modo que seu histórico não dependa
-de consultas futuras aos produtos. Valores são persistidos em centavos e
-expostos como números na unidade monetária. Nesta etapa `shippingAmount` e
-`discountAmount` são zero e `total = subtotal + shippingAmount - discountAmount`.
+Resposta ilustrativa:
 
-O número público tem o formato `EV-` seguido de 18 caracteres hexadecimais
-aleatórios, não sequenciais. Um pedido começa com `status: pending` e
-`paymentStatus: pending`, e cada mudança fica em `statusHistory`. Após sucesso,
-o carrinho é esvaziado e seu `updatedAt` é atualizado. Após qualquer falha, o
-carrinho é preservado e nenhum pedido ou baixa parcial de estoque permanece.
-Não foi adicionada chave de idempotência nesta etapa: repetir uma criação já
-concluída encontra o carrinho vazio e retorna HTTP 400, sem criar duplicata.
+```json
+{
+  "success": true,
+  "data": {
+    "quoteId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expiresAt": "2026-09-05T20:10:00.000Z",
+    "options": [
+      { "serviceId": "1", "carrier": "Correios", "serviceName": "PAC", "price": 15.23, "estimatedDays": 4 }
+    ]
+  }
+}
+```
 
-### Concorrência e consistência
+Exemplo de criação do pedido:
 
-Os testes usam um MongoDB standalone em memória, que não oferece transações. A
-criação faz reservas condicionais e atômicas (`stock >= quantity`) em cada
-produto. Se uma reserva posterior, a criação do pedido ou a limpeza condicional
-do carrinho falhar, todas as reservas anteriores são compensadas e um pedido já
-criado é removido. Assim, pedidos concorrentes não vendem acima do estoque e
-uma alteração concorrente do carrinho não é apagada silenciosamente. Um conflito
-detectado durante essas operações retorna HTTP 409.
+```json
+{
+  "shippingQuoteId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "shippingServiceId": "1",
+  "paymentMethod": "pix",
+  "shippingAddress": {
+    "recipientName": "Cliente Teste",
+    "zipCode": "69000-000",
+    "street": "Rua das Velas",
+    "number": "10",
+    "neighborhood": "Centro",
+    "city": "Manaus",
+    "state": "AM"
+  }
+}
+```
 
-### Listagem, respostas e estados
+O endereço aceita `complement` opcional. Bodies, params e queries são estritos:
+campos desconhecidos, preços, dimensões, origem, totais ou estados enviados pelo
+cliente são rejeitados. ObjectIds são validados antes das consultas. Itens
+inexistentes retornam 404; inativos, duplicados e quantidades inválidas, 400.
 
-As listagens aceitam `page`, `limit` (máximo 100), `status`, `paymentStatus` e
-`sort`, limitado a `createdAt` e `total` (prefixe com `-` para ordem
-decrescente). A listagem administrativa também aceita `user` (ObjectId),
-`orderNumber`, `from` e `to` (datas válidas). Queries e corpos desconhecidos são
-rejeitados. Resumos não carregam produtos nem o documento completo do usuário;
-detalhes administrativos incluem somente `id`, `name` e `email` do cliente.
+A cotação usa peso em kg e dimensões em cm do Product, todos positivos. Cada
+produto é enviado separadamente com `quantity` ao Melhor Envio, que calcula o
+agrupamento; não há algoritmo local de empacotamento. O valor segurado utiliza o
+preço atual, promocional quando disponível. A origem vem de `STORE_POSTAL_CODE`.
+O adapter usa `custom_price` e `custom_delivery_time` quando presentes, filtra
+opções com erro ou sem preço/prazo válido e ordena por preço crescente.
 
-Estados do pedido: `pending`, `confirmed`, `processing`, `shipped`, `delivered`
-e `cancelled`. Transições permitidas:
+O identificador de cotação contém 24 bytes aleatórios (48 caracteres hexadecimais).
+Somente seu hash SHA-256 é armazenado em ShippingQuote, junto ao usuário, CEP,
+opções normalizadas e fingerprint dos itens/quantidades e `cart.revision`.
+A validade é de **10 minutos**, verificada explicitamente mesmo antes da remoção
+pelo índice TTL do MongoDB. A criação consulta esse registro e nunca aceita
+preço/prazo reenviado pelo cliente. Não é necessário segredo de assinatura.
+Qualquer mutação do carrinho incrementa sua revisão, inclusive se as quantidades
+voltarem ao valor anterior. Cotação vencida, de outro usuário, CEP diferente ou
+carrinho alterado retorna 400 e exige nova cotação. O preço de frete fica fixo
+nesses dez minutos; alterações posteriores no catálogo exigem nova cotação para
+refletir novos pesos/dimensões. O preço dos produtos é sempre recalculado no pedido.
 
-- `pending` → `confirmed` ou `cancelled`;
-- `confirmed` → `processing` ou `cancelled`;
-- `processing` → `shipped` ou `cancelled`;
-- `shipped` → `delivered`;
-- `delivered` e `cancelled` são finais.
+O pedido guarda `shipping.provider`, `serviceId`, `serviceName`, `price` e
+`estimatedDays`. A conversão decimal de frete para centavos rejeita valores
+inválidos, precisão maior que duas casas e inteiros fora do limite seguro.
+`shippingAmount = shippingInCents / 100`, e
+`totalInCents = subtotalInCents + shippingInCents - discountInCents`.
+Descontos continuam zero. Duas unidades de R$ 20 com frete de R$ 15,23 geram
+subtotal 4000, frete 1523 e total 5523 centavos (R$ 55,23 na resposta).
 
-Estados de pagamento: `pending`, `paid`, `failed` e `refunded`. Transições:
+### Métodos de pagamento e idempotência
 
-- `pending` → `paid` ou `failed`;
-- `failed` → `pending` (nova tentativa simulada);
-- `paid` → `refunded`;
-- `refunded` é final.
+PIX e boleto recebem o body abaixo; use dados de teste do provedor nas chamadas
+manuais. O e-mail do pagador vem do usuário autenticado. O CPF é transmitido
+somente ao provedor e não é salvo por esta integração.
 
-Enviar novamente o estado atual é idempotente e não duplica o histórico.
-Transições ou estados inválidos retornam HTTP 400. Cancelar não restaura estoque
-nesta etapa; a baixa acontece somente na criação e nunca em mudanças
-administrativas de estado.
+```json
+{
+  "payer": {
+    "firstName": "Cliente",
+    "lastName": "Teste",
+    "identification": { "type": "CPF", "number": "00000000000" }
+  }
+}
+```
 
-Não há integração real com gateway de pagamento, dados de cartão,
-transportadora, cálculo de frete, cupons, devoluções, reembolsos financeiros ou
-cancelamento automático. Os estados de pagamento e reembolso são apenas
-registros administrativos preparados para integrações futuras.
+Para `paymentMethod: credit_card`, acrescente o objeto abaixo ao mesmo body:
+
+```json
+{
+  "card": {
+    "token": "token-gerado-pelo-sdk-oficial",
+    "paymentMethodId": "visa",
+    "installments": 1,
+    "issuerId": "123"
+  }
+}
+```
+
+`issuerId` é opcional; token, bandeira e parcelas (1–12) são obrigatórios para
+cartão. Gere o token com MercadoPago.js/Bricks no cliente. Número completo, CVV
+e validade não são aceitos neste backend. Não há frontend nesta etapa.
+Token e dados do pagador não são persistidos nem registrados em logs.
+
+Resposta PIX ilustrativa:
+
+```json
+{
+  "success": true,
+  "data": {
+    "paymentStatus": "pending",
+    "paymentMethod": "pix",
+    "qrCode": "codigo-pix-do-provedor",
+    "expiresAt": "2026-09-06T20:00:00.000Z"
+  }
+}
+```
+
+PIX pode incluir `qrCodeBase64`; boleto inclui `ticketUrl` HTTPS do Mercado Pago.
+Cartão retorna método e estado. Pagamentos recusados incluem `statusDetail`
+genérico. Credenciais, chave idempotente, identificadores internos e payloads
+brutos nunca integram a resposta. QR e link só são expostos enquanto pendentes.
+
+A tentativa é iniciada **depois** da criação persistida do pedido e limpeza do
+carrinho, por um endpoint separado. Falha externa não remove o pedido nem repete
+estoque. Há uma tentativa por pedido nesta etapa: um UUID v4 persistido antes do
+HTTP vai em `X-Idempotency-Key`; o número público vai em `external_reference`.
+Um HMAC dos dados de entrada impede alterar a requisição durante um retry ambíguo;
+o token original não é armazenado. O cliente precisa repetir os mesmos dados
+(inclusive o token original, quando a resposta da primeira chamada foi perdida).
+
+Uma lease atômica de 30 segundos no MongoDB impede envios concorrentes entre
+instâncias; requisição concorrente retorna 409. Após queda do processo, a lease
+expira e a mesma tentativa pode ser retomada. Quando já existe pagamento,
+repetir POST apenas retorna seu estado. Um webhook também pode recuperar uma
+criação cuja resposta HTTP foi perdida. Não há retry HTTP automático, troca de
+método, nova tentativa após rejeição definitiva ou novo pedido em retry.
+
+Order acrescenta `checkoutCompletedAt` para impedir pagamento enquanto a criação
+ainda pode ser compensada. Preserva os campos anteriores e acrescenta ao pagamento `idempotencyKey`,
+`inputHash`, `lease`, `leaseUntil`, `qrCode`, `qrCodeBase64`, `ticketUrl` e
+`expiresAt`. São usados também `provider`, `externalPaymentId` e `paidAt` já
+existentes. Não há preference nem persistência do payload do provedor.
+
+### Webhook e transições
+
+Cadastre a URL HTTPS pública `/api/v1/webhooks/mercado-pago` na aplicação do
+Mercado Pago, para eventos **payment**. A integração valida `x-signature`
+(`ts` e `v1`) por HMAC-SHA256, em comparação constante, sobre
+`id:<data.id da query>;request-id:<x-request-id>;ts:<ts>;`.
+O ID do body deve corresponder ao ID assinado. São aceitos timestamps em segundos
+ou milissegundos com tolerância local de cinco minutos; mantenha o relógio do
+servidor sincronizado. A chave vem de `MERCADO_PAGO_WEBHOOK_SECRET`.
+
+Após autenticar, consulta `GET /v1/payments/:id` com Bearer token. O status do
+body nunca determina o pagamento. Referência pública, ID da tentativa em
+metadata, ID externo quando já conhecido, método, valor em centavos e moeda BRL
+precisam corresponder ao pedido. Referência desconhecida é ignorada com 200;
+assinatura inválida retorna 401 e divergências retornam 400. Falha confirmatória
+retorna 502/503 para permitir reentrega. A resposta de sucesso contém somente
+`{"success":true}`. O processamento faz uma consulta HTTP com timeout de 8s,
+sem fila ou tarefas pendentes em segundo plano.
+
+Mapeamento explícito:
+
+| Mercado Pago | Interno |
+| --- | --- |
+| pending, in_process, authorized | pending |
+| approved | paid |
+| rejected, cancelled | failed |
+| refunded | refunded |
+| desconhecido, charged_back | nenhuma transição |
+
+Para pagamentos integrados, as transições são `pending → paid/failed` e
+`paid → refunded`; estados iguais não duplicam histórico. Atualização de estado,
+`paidAt` e histórico ocorre em uma operação atômica com comparação do estado
+anterior. Eventos fora de ordem não regridem pagamento pago ou reembolsado.
+O pedido **permanece pending** após aprovação; confirmação logística continua
+administrativa. Estoque não é alterado pelo webhook.
+
+Pedidos sem tentativa integrada preservam o mapa administrativo anterior:
+`pending → paid/failed`, `failed → pending`, `paid → refunded`. Após iniciar a
+tentativa real, alterações administrativas de paymentStatus são bloqueadas,
+inclusive concorrentes à inicialização. Cancelar pedido com tentativa integrada
+também é bloqueado: esta etapa não cancela a cobrança no provedor.
+
+Estados logísticos preservados: `pending → confirmed/cancelled`,
+`confirmed → processing/cancelled`, `processing → shipped/cancelled`,
+`shipped → delivered`; delivered e cancelled são finais. Repetir o estado
+atual é idempotente. Listagens mantêm paginação, filtros e respostas sanitizadas.
+
+### Concorrência, falhas e limites
+
+A criação do pedido continua usando reservas condicionais `stock >= quantity`
+em MongoDB standalone. Falha numa reserva, na persistência ou na limpeza
+condicional do carrinho compensa todas as reservas anteriores e remove o pedido
+criado. A limpeza compara itens e revisão para preservar mudanças concorrentes.
+Como antes, essa compensação não oferece a garantia de uma transação contra
+queda do processo ou falha do próprio banco durante o rollback.
+
+Todas as chamadas externas têm timeout de oito segundos, abrangendo leitura do
+body. HTTP 401/403 do provedor, rate limit, erros 5xx, timeout e falha de rede
+resultam em 503. Recusas restantes, JSON inválido e respostas incompletas resultam
+em 502, sem divulgar mensagens brutas. Logs operacionais incluem somente host,
+status HTTP e categoria sanitizada. A configuração só é validada ao usar a
+integração: falta de variável obrigatória retorna 503 com seu nome; rotas não
+relacionadas continuam disponíveis. Não há retry HTTP automático.
+
+Não há captura manual, split, assinaturas, cupons, etiquetas, rastreamento,
+devoluções, operação financeira de reembolso, conciliação ou restauração de
+estoque em falhas de pagamento. Não há expiração automática de pedidos nem
+liberação automática das reservas. Refund recebido antes de qualquer aprovação
+local é ignorado por transição inválida; esse caso e chargebacks exigem futura
+conciliação. Renovação de tentativa após rejeição e recuperação de token perdido
+pelo cliente não são implementadas. Uma aprovação externa pode ocorrer após
+progressão logística administrativa; a tabela financeira permanece independente.
+
+### Configuração e testes de sandbox
+
+Não foi instalado SDK ou outra dependência. Os adapters usam `fetch` nativo do
+Node.js 20 e contratos pequenos: frete `quote`, pagamento `create/get`. Serviços
+aceitam adapters por argumento; controllers usam `app.locals.shippingAdapter`
+e `app.locals.paymentAdapter` quando fornecidos pelos testes.
+
+No Mercado Pago, crie uma aplicação para Bricks, configure credenciais de teste
+e use pagadores/cartões de teste conforme o painel. A API é
+`https://api.mercadopago.com/v1/payments`, com Bearer token, JSON e
+`X-Idempotency-Key` em POST. A mesma base atende testes; **não configure credenciais
+de produção** nesta etapa. Cadastre o segredo de webhook e a URL pública de teste.
+PIX depende da habilitação do método na conta de teste; nenhum pagamento real foi
+executado na implementação.
+
+No Melhor Envio, crie conta e token no sandbox, com permissão `shipping-calculate`.
+O adapter aceita exclusivamente `https://sandbox.melhorenvio.com.br`, usa
+`POST /api/v2/me/shipment/calculate`, Bearer token e `User-Agent` com nome da loja
+e e-mail de suporte. Não é preciso telefone da loja para cotação.
+
+Documentação oficial consultada:
+
+- [Mercado Pago: PIX via Bricks](https://www.mercadopago.com.br/developers/pt/docs/checkout-bricks/payment-brick/payment-submission/pix).
+- [Mercado Pago: cartões](https://www.mercadopago.com.br/developers/en/docs/checkout-bricks/card-payment-brick/payment-submission).
+- [Mercado Pago: boleto](https://www.mercadopago.com.br/developers/pt/docs/checkout-bricks/payment-brick/payment-submission/other-payment-methods).
+- [Mercado Pago: autenticação de webhooks](https://www.mercadopago.com.br/developers/pt/docs/your-integrations/notifications/webhooks).
+- [Melhor Envio: cálculo por produtos](https://docs.melhorenvio.com.br/reference/calculo-de-fretes-por-produtos).
+
+Para verificar sem credenciais reais, execute `npm run check`, `npm test` e
+`git diff --check`. Os testes usam exclusivamente mongodb-memory-server,
+inicializam os índices antes de começar e não importam server.js/database.js.
+O URI de configuração é substituído por um endereço sentinela inacessível;
+a conexão usa somente `mongoServer.getUri()`. `fetch` global é bloqueado em cada
+teste, e adapters recebem mocks locais. O binário do MongoDB pode precisar ser
+baixado no primeiro uso pelo mongodb-memory-server; nenhum teste chama os
+provedores de pagamento/frete. Os testes anteriores de pedidos isolam a fronteira
+do serviço de frete; a nova suíte exercita cotação persistida e seleção real.
 
 ## Variáveis de ambiente
 
@@ -298,5 +481,12 @@ registros administrativos preparados para integrações futuras.
 | `JWT_REFRESH_SECRET` | Segredo exclusivo para refresh tokens | outro valor longo e aleatório |
 | `JWT_ACCESS_EXPIRES_IN` | Validade do access token | `15m` |
 | `JWT_REFRESH_EXPIRES_IN` | Validade do refresh token | `7d` |
+| `MERCADO_PAGO_ACCESS_TOKEN` | Credencial de teste obrigatória ao criar/consultar pagamento | vazio no exemplo |
+| `MERCADO_PAGO_WEBHOOK_SECRET` | Segredo HMAC obrigatório ao receber webhook | vazio no exemplo |
+| `MELHOR_ENVIO_TOKEN` | Token sandbox obrigatório para cotação | vazio no exemplo |
+| `MELHOR_ENVIO_BASE_URL` | Base restrita ao sandbox | `https://sandbox.melhorenvio.com.br` |
+| `STORE_POSTAL_CODE` | CEP de origem obrigatório | `69000000` |
+| `STORE_NAME` | Nome no User-Agent obrigatório | `ElaneVelas Sandbox` |
+| `STORE_EMAIL` | Contato técnico obrigatório | `suporte@example.com` |
 
 O arquivo `.env` não é enviado ao Git. Use `.env.example` como modelo e cadastre os valores de produção diretamente no serviço de hospedagem.

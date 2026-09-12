@@ -31,6 +31,8 @@ export const orderDetailResponse = (order) => ({
   ...baseResponse(order),
   items: order.items.map(itemResponse),
   shippingAddress: order.shippingAddress,
+  ...(order.shipping?.serviceId && { shipping: { provider: order.shipping.provider, serviceId: order.shipping.serviceId,
+    serviceName: order.shipping.serviceName, price: order.shipping.price, estimatedDays: order.shipping.estimatedDays } }),
   statusHistory: order.statusHistory,
 });
 export const adminOrderSummaryResponse = (order) => ({

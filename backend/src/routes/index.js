@@ -10,7 +10,10 @@ import wishlistRoutes from './wishlist.routes.js';
 import orderRoutes from './order.routes.js';
 import adminOrderRoutes from './adminOrder.routes.js';
 
+import integrationRoutes from './integration.routes.js';
+
 const router = Router();
+router.use(integrationRoutes);
 
 router.get('/health', health);
 router.get('/test-error', testError);

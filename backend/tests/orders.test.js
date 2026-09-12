@@ -7,11 +7,17 @@ import Order from '../src/models/Order.js';
 import Product from '../src/models/Product.js';
 import User from '../src/models/User.js';
 
+// Legacy order regression tests isolate the shipping service boundary.
+vi.mock('../src/services/shipping.service.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  selectShipping: vi.fn(async () => ({ provider: 'melhor_envio', serviceId: '1', serviceName: 'Teste', price: 0, estimatedDays: 3 })),
+}));
+
 const address = {
   recipientName: 'Cliente Teste', zipCode: '69000-000', street: 'Rua das Velas',
   number: '10', complement: 'Casa', neighborhood: 'Centro', city: 'Manaus', state: 'AM',
 };
-const body = (overrides = {}) => ({ shippingAddress: address, paymentMethod: 'pix', ...overrides });
+const body = (overrides = {}) => ({ shippingQuoteId: 'a'.repeat(48), shippingServiceId: '1', shippingAddress: address, paymentMethod: 'pix', ...overrides });
 
 async function account(email = 'cliente@example.com', role = 'customer') {
   const response = await request(app).post('/api/v1/auth/register').send({
@@ -125,10 +131,23 @@ describe('criação de pedidos', () => {
     const second = await account('concorrente2@example.com');
     const item = await product({ stock: 1 });
     await Promise.all([add(first.authorization, item), add(second.authorization, item)]);
+    // Both requests must read available stock before either starts reserving it.
+    const originalFind = Product.find.bind(Product);
+    let readers = 0;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const findSpy = vi.spyOn(Product, 'find').mockImplementation(async (...args) => {
+      const products = await originalFind(...args);
+      readers += 1;
+      if (readers === 2) release();
+      await gate;
+      return products;
+    });
     const responses = await Promise.all([
       request(app).post('/api/v1/orders').set('Authorization', first.authorization).send(body()),
       request(app).post('/api/v1/orders').set('Authorization', second.authorization).send(body()),
     ]);
+    findSpy.mockRestore();
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
     expect((await Product.findById(item._id)).stock).toBe(0);
     expect(await Order.countDocuments()).toBe(1);

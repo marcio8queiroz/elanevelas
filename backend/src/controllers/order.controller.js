@@ -75,13 +75,15 @@ async function transition(req, res, { field, historyType, transitions }) {
   const nextStatus = req.validated.body[field];
   const current = await Order.findById(req.validated.params.orderId);
   if (!current) throw new AppError('Pedido não encontrado.', 404);
+  if (field === 'paymentStatus' && current.payment?.provider === 'mercado_pago') throw new AppError('Pagamento gerenciado pelo provedor.', 400);
+  if (field === 'status' && nextStatus === 'cancelled' && current.payment?.provider === 'mercado_pago') throw new AppError('Pedido com tentativa de pagamento não pode ser cancelado nesta etapa.', 400);
   if (current[field] === nextStatus) {
     await current.populate({ path: 'user', select: 'name email' });
     return res.json({ success: true, data: adminOrderDetailResponse(current) });
   }
   if (!transitions[current[field]]?.includes(nextStatus)) throw new AppError('Transição de estado inválida.', 400);
   const updated = await Order.findOneAndUpdate(
-    { _id: current._id, [field]: current[field] },
+    { _id: current._id, [field]: current[field], 'payment.idempotencyKey': current.payment?.idempotencyKey ?? { $exists: false } },
     { $set: { [field]: nextStatus }, $push: { statusHistory: { type: historyType, status: nextStatus, changedAt: new Date() } } },
     { returnDocument: 'after', runValidators: true },
   ).populate({ path: 'user', select: 'name email' });

@@ -7,7 +7,7 @@ export default function userResponse(user) {
     role: user.role,
     addresses: user.addresses,
     wishlist: user.wishlist,
-    cart: user.cart,
+    cart: { items: user.cart.items, updatedAt: user.cart.updatedAt },
     isActive: user.isActive,
     emailVerified: user.emailVerified,
     createdAt: user.createdAt,

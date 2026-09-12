@@ -136,6 +136,7 @@ export const addCartItem = asyncHandler(async (req, res) => {
             ],
           },
           'cart.updatedAt': '$$NOW',
+          'cart.revision': { $add: [{ $ifNull: ['$cart.revision', 0] }, 1] },
         },
       },
     ],
@@ -154,7 +155,7 @@ export const updateCartItem = asyncHandler(async (req, res) => {
 
   const updated = await User.findOneAndUpdate(
     { _id: req.user._id, 'cart.items.product': productId },
-    { $set: { 'cart.items.$.quantity': quantity, 'cart.items.$.updatedAt': new Date(), 'cart.updatedAt': new Date() } },
+    { $inc: { 'cart.revision': 1 }, $set: { 'cart.items.$.quantity': quantity, 'cart.items.$.updatedAt': new Date(), 'cart.updatedAt': new Date() } },
     { returnDocument: 'after', runValidators: true },
   ).select('cart').populate(cartPopulate);
   if (!updated) throw new AppError('Item não encontrado no carrinho.', 404);
@@ -164,7 +165,7 @@ export const updateCartItem = asyncHandler(async (req, res) => {
 export const removeCartItem = asyncHandler(async (req, res) => {
   await User.updateOne(
     { _id: req.user._id },
-    { $pull: { 'cart.items': { product: req.validated.params.productId } }, $set: { 'cart.updatedAt': new Date() } },
+    { $inc: { 'cart.revision': 1 }, $pull: { 'cart.items': { product: req.validated.params.productId } }, $set: { 'cart.updatedAt': new Date() } },
   );
   res.status(204).end();
 });
@@ -172,7 +173,7 @@ export const removeCartItem = asyncHandler(async (req, res) => {
 export const clearCart = asyncHandler(async (req, res) => {
   await User.updateOne(
     { _id: req.user._id },
-    { $set: { 'cart.items': [], 'cart.updatedAt': new Date() } },
+    { $inc: { 'cart.revision': 1 }, $set: { 'cart.items': [], 'cart.updatedAt': new Date() } },
   );
   res.status(204).end();
 });

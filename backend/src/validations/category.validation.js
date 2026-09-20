@@ -1,18 +1,10 @@
 import { z } from 'zod';
 import { booleanQuery, positiveInteger, sortField } from './common.validation.js';
 
-const imageSchema = z
-  .object({
-    url: z.string().trim().min(1).max(2048),
-    publicId: z.string().trim().min(1).max(255).optional(),
-  })
-  .strict();
-
 const categoryFields = {
   name: z.string().trim().min(1).max(80),
   slug: z.string().trim().min(1).max(120).toLowerCase(),
   description: z.string().trim().max(500).optional(),
-  image: imageSchema.optional(),
   isActive: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
 };

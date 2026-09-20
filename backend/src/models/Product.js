@@ -1,3 +1,4 @@
+import { catalogImageTransform } from '../utils/imageResponse.js';
 import mongoose from "mongoose";
 
 const productImageSchema = new mongoose.Schema(
@@ -7,6 +8,11 @@ const productImageSchema = new mongoose.Schema(
       required: true,
     },
     publicId: String,
+    id: String,
+    width: Number,
+    height: Number,
+    format: String,
+    bytes: Number,
     alt: String,
     isMain: {
       type: Boolean,
@@ -92,6 +98,8 @@ const productSchema = new mongoose.Schema(
       default: 5,
     },
 
+    imageRevision: { type: Number, default: 0 },
+
     images: {
       type: [productImageSchema],
       default: [],
@@ -153,6 +161,7 @@ const productSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { transform: catalogImageTransform },
   }
 );
 

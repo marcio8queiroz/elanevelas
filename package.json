@@ -9,6 +9,8 @@
     "check": "node --check backend/src/server.js && node --check backend/src/app.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "images:migrate": "node backend/scripts/images.js migrate",
+    "images:cleanup": "node backend/scripts/images.js cleanup",
     "docker:mongo:up": "docker compose up -d mongodb",
     "docker:mongo:down": "docker compose down",
     "docker:mongo:logs": "docker compose logs -f mongodb"
@@ -18,7 +20,7 @@
   "license": "ISC",
   "description": "API do projeto Elane Velas, construída com Express e MongoDB.",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -26,6 +28,8 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
+    "multer": "^2.3.0",
+    "sharp": "^0.35.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {

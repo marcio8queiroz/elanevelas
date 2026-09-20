@@ -4,7 +4,7 @@ API do projeto Elane Velas, desenvolvida com Node.js, Express e MongoDB.
 
 ## Requisitos
 
-- Node.js 20 ou superior
+- Node.js 20.19 ou superior (Mongoose existente exige 20.19; Sharp exige 20.9)
 - Docker com Docker Compose
 
 ## Instalação
@@ -75,6 +75,9 @@ Todos os endpoints usam o prefixo `/api/v1`:
 | `GET`, `POST` | `/products` | Listar ou criar produtos |
 | `GET`, `PATCH`, `DELETE` | `/products/:id` | Consultar, atualizar ou excluir um produto |
 
+Consultas permanecem públicas. Criação, atualização e exclusão de produtos e
+categorias exigem access token de administrador.
+
 As duas listagens aceitam `page` (padrão 1), `limit` (padrão 10, máximo 100),
 `sort` e `search`. Categorias também aceitam `isActive` e podem ser ordenadas por
 `name`, `slug`, `sortOrder`, `createdAt` e `updatedAt`. Produtos aceitam
@@ -89,6 +92,7 @@ Exemplos:
 curl 'http://localhost:3000/api/v1/products?page=1&limit=20&inStock=true&sort=price'
 
 curl -X POST http://localhost:3000/api/v1/categories \
+  -H 'Authorization: Bearer <admin-access-token>' \
   -H 'Content-Type: application/json' \
   -d '{"name":"Velas aromáticas","slug":"velas-aromaticas","isActive":true}'
 ```
@@ -470,6 +474,226 @@ baixado no primeiro uso pelo mongodb-memory-server; nenhum teste chama os
 provedores de pagamento/frete. Os testes anteriores de pedidos isolam a fronteira
 do serviço de frete; a nova suíte exercita cotação persistida e seleção real.
 
+## Imagens de produtos e categorias
+
+Somente o backend foi implementado. Configure `CLOUDINARY_CLOUD_NAME`,
+`CLOUDINARY_API_KEY` e `CLOUDINARY_API_SECRET` no ambiente do servidor. Crie um
+ambiente Cloudinary separado para desenvolvimento e use suas credenciais de API.
+Não exponha o secret ao cliente. Não é necessário upload preset ou SDK Cloudinary.
+A falta dessas variáveis afeta uploads e limpeza remota; consultas, edição de
+alt, ordenação e remoção lógica continuam disponíveis.
+
+O adapter pequeno oferece `store({ publicId, buffer }) → { url }` e
+`remove({ publicId }) → void`. Usa `fetch`, `FormData`, `Blob` e `crypto` nativos
+do Node.js, com autenticação assinada SHA-256 e timestamp. Os endpoints fixos são
+`https://api.cloudinary.com/v1_1/<cloud>/image/upload` e `/image/destroy`;
+upload usa `overwrite=false`, exclusão usa `invalidate=true` e aceita `not found`
+como sucesso idempotente. Timeout de oito segundos inclui leitura da resposta;
+não há retry automático de upload nem redirecionamentos HTTP. O cliente não
+controla chaves, caminhos, transformações ou opções do provedor.
+
+Dependências adicionadas: `multer` 2.3 para multipart em memória com limites e
+`sharp` 0.35 para decodificação e reprocessamento real via libvips. Nenhuma
+dependência anterior oferecia essas funções. Sharp requer **Node.js >=20.9**;
+a implementação foi verificada em Node.js 20.19. O lockfile fixa as versões e
+inclui os binários opcionais por plataforma. Não há dependência de geração de
+imagens por IA. Referências oficiais consultadas:
+[Cloudinary Upload API](https://cloudinary.com/documentation/image_upload_api_reference),
+[assinaturas](https://cloudinary.com/documentation/authentication_signatures),
+[Multer](https://expressjs.com/en/resources/middleware/multer/),
+[limites do Sharp](https://sharp.pixelplumbing.com/api-constructor/) e
+[remoção de metadados](https://sharp.pixelplumbing.com/api-output/).
+
+### Contratos e autorização
+
+Todos os caminhos usam `/api/v1`. `id` do recurso é um ObjectId; `imageId` é um
+UUID estável gerado pelo servidor, independente da posição no array.
+
+| Método | Caminho | Entrada / resposta |
+| --- | --- | --- |
+| POST | `/products/:id/images` | Multipart `file` e `alt` opcional; 201, lista completa de imagens |
+| GET | `/products/:id/images` | Público; 200, lista completa na ordem atual |
+| PATCH | `/products/:id/images/order` | JSON `{ "imageIds": ["uuid-2", "uuid-1"] }`; 200, lista ordenada |
+| PATCH | `/products/:id/images/:imageId` | JSON com `alt` e/ou `isMain: true`; 200, lista completa |
+| DELETE | `/products/:id/images/:imageId` | 204; imagem ausente retorna 404 |
+| PUT | `/categories/:id/image` | Multipart `file` e `alt` opcional; 200, imagem substituída |
+| DELETE | `/categories/:id/image` | 204, inclusive se já estiver sem imagem; categoria permanece |
+
+As mutações exigem administrador, validado **antes de ler o multipart**.
+IDs, existência e limite do produto também são verificados antes do parsing.
+Queries são vazias e estritas; campos desconhecidos são rejeitados. `alt` aceita
+até 200 caracteres (vazio remove o texto). Não se aceita `isMain: false`: escolha
+outra principal com `true`. Ordenação exige todos os IDs do produto, exatamente
+uma vez; uma lista vazia só é válida quando não há imagens. Imagem de outro
+produto retorna 404 nas operações individuais. A rota estática `order` precede
+o parâmetro de imagem.
+
+Respostas usam `{ "success": true, "data": ... }`. Uma imagem pública contém
+`id`, `url`, `alt`, `width`, `height`, `format` e `bytes`; imagens de produto
+também contêm `isMain`. Legados podem não ter metadados ou ID até a migração.
+`publicId`, revisão e registros de armazenamento não são retornados, inclusive
+em consultas de catálogo, carrinho e desejos. A URL pública de entrega pode
+naturalmente conter o caminho do arquivo. Não há base64 nas respostas de imagens.
+
+**Mudança dos contratos existentes:** POST/PATCH gerais de produtos e categorias
+não aceitam mais `images`/`image`, nem `publicId` ou campos internos. Primeiro
+crie o recurso e depois use multipart. Todas as mutações gerais do catálogo,
+inclusive exclusão completa, agora exigem admin. As consultas continuam públicas;
+preços, carrinho, desejos e snapshots de pedidos preservam seus contratos.
+O middleware central também deixa de expor stacks e erros brutos em qualquer
+ambiente, para não vazar caminhos locais ou credenciais.
+
+```bash
+curl -X POST 'http://localhost:3000/api/v1/products/<productId>/images' \
+  -H 'Authorization: Bearer <admin-access-token>' \
+  -F 'file=@./vela.png;type=image/png' -F 'alt=Vela de lavanda'
+
+curl -X PUT 'http://localhost:3000/api/v1/categories/<categoryId>/image' \
+  -H 'Authorization: Bearer <admin-access-token>' \
+  -F 'file=@./categoria.jpg;type=image/jpeg'
+
+curl -X PATCH 'http://localhost:3000/api/v1/products/<productId>/images/<imageId>' \
+  -H 'Authorization: Bearer <admin-access-token>' \
+  -H 'Content-Type: application/json' -d '{"isMain":true,"alt":"Vista lateral"}'
+
+curl -X PATCH 'http://localhost:3000/api/v1/products/<productId>/images/order' \
+  -H 'Authorization: Bearer <admin-access-token>' \
+  -H 'Content-Type: application/json' -d '{"imageIds":["<imageId-2>","<imageId-1>"]}'
+```
+
+### Formatos e limites
+
+- Um arquivo por requisição, no campo `file`; até **5 MiB** de entrada e saída.
+- Somente JPEG, PNG e WebP estáticos. SVG, GIF mesmo estático, APNG, WebP animado,
+  documentos, vídeos, arquivos truncados e conteúdo não imagem são rejeitados.
+- Até **8192 pixels por dimensão** e **16.000.000 pixels decodificados**.
+- Assinatura binária e decodificação real determinam o formato; MIME deve
+  corresponder. Nome/extensão são ignorados, portanto PNG válido chamado `.svg`
+  com MIME `image/png` é aceito, mas SVG disfarçado de PNG não é.
+- Saída sempre WebP com qualidade 85, orientação normalizada e sem EXIF/GPS/ICC.
+  O processamento tem limite de dez segundos; não preserva os bytes originais.
+- Até 20 imagens por produto. Multipart aceita um campo textual de até 800 bytes
+  e nome de campo de até 32 bytes. Arquivos ou campos extras são rejeitados;
+  o parser usa limite de partes 3 como sentinela para as duas partes permitidas.
+- Requisições com Content-Length acima de 5 MiB + 16 KiB são rejeitadas com 413.
+  Sem Content-Length, limites do parser continuam aplicados a cada parte.
+  Há no máximo quatro uploads/processamentos ativos por processo, sem fila;
+  saturação retorna 503. Os buffers são limitados; não há arquivos temporários.
+- Não há importação por URL. Use os bytes locais no multipart.
+
+### Schemas, imagens antigas e migração
+
+Product mantém o array sem `_id` nos subdocumentos e acrescenta `id` UUID e
+metadados opcionais. Category preserva seu objeto `image` e acrescenta os mesmos
+campos, além de alt. Ambos acrescentam `imageRevision` interna (ausência equivale
+a zero). `publicId` permanece interno, inclusive para os legados que já o tinham.
+
+A migração **não roda no bootstrap nem nos endpoints**. Até executá-la, consultas
+de produtos antigos continuam funcionando e mutações de suas imagens retornam
+409. O script preserva URLs e todos os campos antigos, atribui UUIDs aos itens
+sem ID e corrige duplicatas de ID. Mantém a primeira imagem marcada como principal
+ou escolhe a primeira quando nenhuma estiver marcada. Uma comparação do array
+original impede sobrescrever alterações concorrentes; conflitos são contados e
+podem ser tratados repetindo o comando. Reexecuções são idempotentes. Não são
+inventadas referências externas nem são excluídos arquivos antigos.
+
+O script exige URI separada explicitamente e **não lê `.env`**, não importa
+server.js/database.js e recusa `NODE_ENV=test`. Use a URI do banco que pretende
+administrar, após revisar o dry-run; estes comandos não foram executados contra
+o banco de desenvolvimento durante a implementação.
+
+```bash
+export IMAGE_MAINTENANCE_MONGODB_URI='mongodb://127.0.0.1:27017/banco-a-administrar'
+npm run images:migrate -- --dry-run
+npm run images:migrate -- --apply
+```
+
+### Concorrência, retenção e recuperação
+
+Cada mutação compara `imageRevision` e grava o conjunto de imagens incrementando
+a revisão em uma única operação MongoDB. Duas requisições com a mesma revisão
+não vencem juntas: uma recebe 409 e deve consultar novamente antes de repetir.
+Isso impede ultrapassar 20 imagens, perder mudanças de alt/ordem e criar múltiplas
+principais, inclusive entre instâncias. A primeira imagem é principal; remover a
+principal escolhe a primeira restante na ordem atual. Não há transação distribuída.
+
+**Política de retenção:** todo arquivo publicado ou potencialmente publicado é
+mantido por prazo indeterminado, mesmo após remover uma imagem, substituir imagem
+de categoria ou excluir o produto/categoria completo. DELETE conclui a desvinculação
+do catálogo, não a exclusão física desses arquivos. Isso protege URLs copiadas em
+pedidos, inclusive pedidos criados simultaneamente à remoção e referências
+compartilhadas. Arquivos legados também nunca são apagados remotamente por estas
+rotas. Esta garantia depende de não apagar arquivos manualmente no Cloudinary e
+de manter a conta disponível; implica custo de armazenamento acumulado.
+
+`ImageAsset` é um registro durável pequeno, com chave gerada pelo servidor, URL,
+estado, tentativas, próxima execução e lease. Não armazena secrets nem respostas
+brutas. É criado **antes** do upload com estado `uploading`. Upload falho/ambíguo
+ou queda do processo preservam esse registro para limpeza após quarentena de 24h;
+não há reenvio automático. Antes de publicar a URL, o estado muda condicionalmente
+para `retained`; um worker que já tenha assumido o registro impede publicação.
+Se uma requisição pausada voltar com sucesso depois dessa limpeza, a tarefa é
+reaberta e destroy é repetido; uma falha tardia rearma a quarentena. Se o banco
+também estiver indisponível nesse ponto, a identidade original permanece no
+registro para investigação operacional. A quarentena não é uma transação com
+o provedor nem uma garantia contra atrasos externos arbitrários.
+
+Se o banco rejeitar definitivamente a atualização (incluindo conflito de revisão),
+o serviço verifica referências e tenta remover o arquivo novo. Se destroy falhar,
+fica `cleanup`; nenhuma tarefa é esquecida. Uma falha de rede na gravação do banco
+pode significar que a atualização foi concluída: nesse caso, mantém `retained`,
+mesmo se a referência já tiver sido removida por outra requisição. Também é
+possível uma queda entre a marca de retenção e a gravação do catálogo. Esses
+registros permanecem retidos por segurança, identificáveis no banco, podendo
+reter arquivos que nunca chegaram a ser publicados. Não há varredura destrutiva
+ou reconciliação automática desses registros ambíguos.
+
+O comando de limpeza processa até 100 registros por execução, sequencialmente,
+com lease atômica de 60s, backoff exponencial a partir de dois minutos e no máximo
+cinco tentativas. `destroy` com arquivo ausente é sucesso. Falha depois de destroy
+mas antes da confirmação local pode repetir a exclusão com segurança. Antes de
+excluir, consulta produtos, categorias e URLs dos snapshots de pedidos; qualquer
+referência promove o registro a `retained`. Falha nessa consulta impede exclusão.
+Somente arquivos criados no registro local são elegíveis, nunca IDs arbitrários
+das imagens antigas. Use sempre credenciais do mesmo ambiente Cloudinary que
+originou o registro.
+
+```bash
+# Forneça as variáveis CLOUDINARY_* no ambiente do comando, sem publicá-las.
+npm run images:cleanup -- --dry-run  # contagens por estado; nenhuma chamada externa
+npm run images:cleanup -- --apply    # limpeza de órfãos elegíveis
+```
+
+Agende o comando conforme a operação da loja; não há worker automático no servidor.
+Registros com cinco falhas ficam `failed` e exigem intervenção, sem perder a chave.
+Após corrigir a causa, um operador pode inspecionar e reabrir **um registro failed**
+no banco (`imageassets`) com `state: 'cleanup'`, `attempts: 0`,
+`nextAttemptAt: new Date()`, removendo `lease`/`leaseUntil`, e executar novamente
+o comando. Nunca reabra registros `retained` para limpeza automática.
+
+| HTTP | Significado nas rotas de imagens |
+| --- | --- |
+| 400 | Multipart, IDs, alt ou ordenação inválidos; corrupção ou dimensões excessivas |
+| 401 / 403 | Sem autenticação / sem papel admin |
+| 404 | Recurso ou imagem inexistente |
+| 409 | Revisão concorrente, limite de imagens ou migração de IDs necessária |
+| 413 | Arquivo, campo textual ou Content-Length acima dos limites |
+| 415 | Formato/MIME não suportado, animação ou ausência de multipart |
+| 502 | Recusa ou resposta inválida do provedor |
+| 503 | Configuração ausente, timeout, indisponibilidade externa, persistência ambígua ou capacidade ocupada |
+| 500 | Falha interna inesperada, como indisponibilidade ao criar o registro inicial; resposta genérica |
+
+### Testes de imagens sem credenciais reais
+
+Execute `npm run check`, `npm test` e `git diff --check`. As quatro novas suítes
+`images`, `image-processing`, `image-provider` e `image-cleanup` usam o mesmo
+mongodb-memory-server isolado. Fixtures são geradas localmente com Sharp, sem
+dados pessoais. Parsing e processamento são reais; os testes de rota injetam
+somente `app.locals.imageAdapter`, e os testes do adapter injetam o cliente HTTP.
+O bloqueio de `fetch` externo do setup permanece ativo. Migração e limpeza são
+testadas como serviços no banco temporário, sem executar o CLI contra `.env`.
+Nenhum upload ou destroy manual foi executado no Cloudinary.
+
 ## Variáveis de ambiente
 
 | Variável | Descrição | Exemplo |
@@ -488,5 +712,9 @@ do serviço de frete; a nova suíte exercita cotação persistida e seleção re
 | `STORE_POSTAL_CODE` | CEP de origem obrigatório | `69000000` |
 | `STORE_NAME` | Nome no User-Agent obrigatório | `ElaneVelas Sandbox` |
 | `STORE_EMAIL` | Contato técnico obrigatório | `suporte@example.com` |
+| `CLOUDINARY_CLOUD_NAME` | Ambiente Cloudinary para imagens | vazio no exemplo |
+| `CLOUDINARY_API_KEY` | Chave de API Cloudinary | vazio no exemplo |
+| `CLOUDINARY_API_SECRET` | Secret de API, somente no servidor | vazio no exemplo |
+| `IMAGE_MAINTENANCE_MONGODB_URI` | URI explícita para o CLI de migração/limpeza, sem carregar `.env` | vazio no exemplo |
 
 O arquivo `.env` não é enviado ao Git. Use `.env.example` como modelo e cadastre os valores de produção diretamente no serviço de hospedagem.

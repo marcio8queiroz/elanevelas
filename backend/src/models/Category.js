@@ -1,3 +1,4 @@
+import { catalogImageTransform } from '../utils/imageResponse.js';
 import mongoose from "mongoose";
 
 const categorySchema = new mongoose.Schema(
@@ -25,9 +26,17 @@ const categorySchema = new mongoose.Schema(
       maxlength: 500,
     },
 
+    imageRevision: { type: Number, default: 0 },
+
     image: {
       url: String,
       publicId: String,
+      id: String,
+      width: Number,
+      height: Number,
+      format: String,
+      bytes: Number,
+      alt: String,
     },
 
     isActive: {
@@ -43,6 +52,7 @@ const categorySchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { transform: catalogImageTransform },
   }
 );
 

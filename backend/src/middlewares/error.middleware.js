@@ -25,10 +25,9 @@ export default function errorMiddleware(error, req, res, next) {
   const normalizedError = normalizeError(error);
   const statusCode = normalizedError.statusCode ?? 500;
   const status = normalizedError.status ?? 'error';
-  const isProduction = process.env.NODE_ENV === 'production';
 
-  if (isProduction && !normalizedError.isOperational) {
-    console.error('Erro inesperado na aplicação.', error);
+  if (!normalizedError.isOperational) {
+    console.error('Erro inesperado na aplicação.');
     return res.status(500).json({
       success: false,
       message: 'Ocorreu um erro interno no servidor.',
@@ -42,10 +41,5 @@ export default function errorMiddleware(error, req, res, next) {
     status,
   };
 
-  if (!isProduction) {
-    response.stack = normalizedError.stack;
-  }
-
   return res.status(statusCode).json(response);
 }
-

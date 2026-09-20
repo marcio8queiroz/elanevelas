@@ -1,3 +1,4 @@
+import { imageResponse } from './imageResponse.js';
 const publicProductFields = 'name slug shortDescription fragrance price promotionalPrice stock images isActive';
 
 export const publicProductSelect = publicProductFields;
@@ -12,6 +13,6 @@ export default function productResponse(product) {
     price: product.price,
     promotionalPrice: product.promotionalPrice,
     stock: product.stock,
-    images: product.images,
+    images: product.images.map(imageResponse),
   };
 }

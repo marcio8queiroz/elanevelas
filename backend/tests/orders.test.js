@@ -231,3 +231,22 @@ describe('administração de pedidos', () => {
     expect((await request(app).get('/api/v1/admin/orders?user=invalido').set('Authorization', admin.authorization)).status).toBe(400);
   });
 });
+
+describe('ações disponíveis somente nos detalhes administrativos', () => {
+  it('expõe as transições reais sem divulgar informações internas de pagamento', async () => {
+    const created = await createReadyOrder();
+    const admin = await account('admin-actions@example.com', 'admin');
+    const endpoint = `/api/v1/admin/orders/${created.order.id}`;
+    const get = () => request(app).get(endpoint).set('Authorization', admin.authorization);
+    expect((await get()).body.data.allowedActions).toEqual({ statuses: ['confirmed', 'cancelled'], paymentStatuses: ['paid', 'failed'], paymentManagedExternally: false });
+    expect((await request(app).get(`/api/v1/orders/${created.order.id}`).set('Authorization', created.authorization)).body.data).not.toHaveProperty('allowedActions');
+    await Order.updateOne({ _id: created.order.id }, { $set: { 'payment.provider': 'mercado_pago', 'payment.idempotencyKey': 'private-key' } });
+    const integrated = await get();
+    expect(integrated.body.data.allowedActions).toEqual({ statuses: ['confirmed'], paymentStatuses: [], paymentManagedExternally: true });
+    expect(JSON.stringify(integrated.body)).not.toContain('private-key');
+    expect((await request(app).patch(`${endpoint}/payment-status`).set('Authorization', admin.authorization).send({ paymentStatus: 'paid' })).status).toBe(400);
+    expect((await request(app).patch(`${endpoint}/status`).set('Authorization', admin.authorization).send({ status: 'cancelled' })).status).toBe(400);
+    await Order.updateOne({ _id: created.order.id }, { status: 'delivered', paymentStatus: 'refunded' });
+    expect((await get()).body.data.allowedActions).toEqual({ statuses: [], paymentStatuses: [], paymentManagedExternally: true });
+  });
+});

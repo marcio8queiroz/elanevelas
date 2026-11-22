@@ -1,3 +1,4 @@
+import { orderActions } from './orderActions.js';
 const money = (cents) => cents / 100;
 
 const itemResponse = (item) => ({
@@ -41,5 +42,6 @@ export const adminOrderSummaryResponse = (order) => ({
 });
 export const adminOrderDetailResponse = (order) => ({
   ...orderDetailResponse(order),
+  allowedActions: orderActions(order),
   ...(order.user && { customer: { id: order.user.id, name: order.user.name, email: order.user.email } }),
 });

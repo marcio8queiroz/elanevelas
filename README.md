@@ -30,7 +30,7 @@ reinicializações do container.
 
 Para desenvolvimento, com reinicialização automática:
 
-```bash
+```bash /frontend
 npm run dev
 ```
 
@@ -320,7 +320,7 @@ Para `paymentMethod: credit_card`, acrescente o objeto abaixo ao mesmo body:
 
 `issuerId` é opcional; token, bandeira e parcelas (1–12) são obrigatórios para
 cartão. Gere o token com MercadoPago.js/Bricks no cliente. Número completo, CVV
-e validade não são aceitos neste backend. Não há frontend nesta etapa.
+e validade não são aceitos neste backend. O checkout público não faz parte do painel administrativo.
 Token e dados do pagador não são persistidos nem registrados em logs.
 
 Resposta PIX ilustrativa:
@@ -476,7 +476,7 @@ do serviço de frete; a nova suíte exercita cotação persistida e seleção re
 
 ## Imagens de produtos e categorias
 
-Somente o backend foi implementado. Configure `CLOUDINARY_CLOUD_NAME`,
+O gerenciamento administrativo está disponível no frontend descrito ao final. Configure `CLOUDINARY_CLOUD_NAME`,
 `CLOUDINARY_API_KEY` e `CLOUDINARY_API_SECRET` no ambiente do servidor. Crie um
 ambiente Cloudinary separado para desenvolvimento e use suas credenciais de API.
 Não exponha o secret ao cliente. Não é necessário upload preset ou SDK Cloudinary.
@@ -718,3 +718,186 @@ Nenhum upload ou destroy manual foi executado no Cloudinary.
 | `IMAGE_MAINTENANCE_MONGODB_URI` | URI explícita para o CLI de migração/limpeza, sem carregar `.env` | vazio no exemplo |
 
 O arquivo `.env` não é enviado ao Git. Use `.env.example` como modelo e cadastre os valores de produção diretamente no serviço de hospedagem.
+
+## Painel administrativo (frontend)
+
+O diretório `frontend` contém o painel de administração em português, feito com
+React, TypeScript e Vite. A pasta estava vazia; não havia framework ou componentes
+a reaproveitar. React organiza componentes e estado, TypeScript verifica os
+contratos consumidos e Vite fornece desenvolvimento, proxy local e build estático.
+CSS próprio evita dependências de componentes, fontes externas e infraestrutura
+adicional. Não há loja pública, checkout ou dados demonstrativos em produção.
+
+### Instalação e execução
+
+Use Node.js **20.19+** (ou 22.12+) e dois terminais:
+
+```bash
+# Raiz: backend, com seu MongoDB local configurado conforme as seções acima
+npm ci
+npm run dev
+
+# Segundo terminal: frontend
+npm ci --prefix frontend
+cp frontend/.env.example frontend/.env
+npm run dev --prefix frontend
+```
+
+Abra `http://127.0.0.1:5173`. A porta é fixa; se estiver ocupada, encerre a outra
+instância. O proxy do Vite encaminha somente `/api/v1` para
+`http://127.0.0.1:3000`, preservando a origem. A variável pública é:
+
+```dotenv
+VITE_API_URL=/api/v1
+```
+
+O valor deve apontar para a raiz da API, sem barra final. Nenhuma variável JWT,
+Cloudinary, Mercado Pago, Melhor Envio ou URI de banco pertence ao frontend.
+Variáveis `VITE_*` são públicas e incorporadas ao build. O frontend não lê o `.env`
+da raiz. O proxy é exclusivo de desenvolvimento. Em produção, publique
+`frontend/dist` e configure o servidor/reverse proxy para encaminhar `/api/v1` ao
+backend **na mesma origem**, com HTTPS. Uma URL de API em outra origem exige uma
+configuração explícita de CORS no servidor; não foi adicionada permissão CORS
+ampla. O backend não passa a servir os arquivos estáticos automaticamente.
+
+### Sessão e autorização
+
+Access e refresh tokens ficam **somente em memória**, sem localStorage,
+sessionStorage, cookies ou URLs. Recarregar ou fechar a página requer novo login.
+Não foram introduzidos cookies HttpOnly: o contrato JSON existente de login,
+rotação e revogação foi preservado, sem modificar CORS/CSRF. Requisições usam
+Bearer e `credentials: omit`; credenciais não são enviadas automaticamente pelo
+navegador. Nenhuma senha ou token é registrada em logs.
+
+Uma única promessa compartilha a renovação entre requisições simultâneas. Uma
+resposta 401 tardia usa o token já renovado. Leituras têm no máximo uma repetição
+após renovação. **Mutações nunca são repetidas automaticamente**: após um 401, a
+sessão é renovada e a interface pede novo envio explícito, preservando o formulário.
+Erros de rede, 409 e 5xx não provocam retries de mutações. Falha na renovação ou
+novo 401 na leitura encerra a sessão. Logout aguarda eventual rotação e revoga o
+refresh mais recente; se a API estiver indisponível, encerra localmente e informa
+que a revogação remota não pôde ser confirmada. Fechar a aba sem logout descarta
+as credenciais locais, mas não revoga o token no servidor antes de sua expiração.
+
+Login de usuário sem papel `admin` é recusado e os tokens emitidos são revogados.
+A autorização do backend permanece obrigatória em todas as mutações e rotas
+administrativas. A navegação do painel não é uma barreira de segurança do servidor.
+Tokens em memória reduzem persistência, mas não eliminam risco de XSS; descrições
+são renderizadas como texto e não há HTML arbitrário, scripts ou fontes remotos.
+
+### Obter um administrador local
+
+Não há credenciais fixas, endpoint de promoção ou cadastro público administrativo.
+Crie uma conta comum em `/api/v1/auth/register` com uma senha própria (por exemplo,
+um cliente HTTP local que não registre o corpo). Um operador com acesso autorizado
+ao **MongoDB de desenvolvimento** deve verificar a conta e promover somente o
+ObjectId escolhido. Em `mongosh`, conectado explicitamente ao banco local correto:
+
+```javascript
+// Substitua os placeholders; confira o banco e a identidade antes de atualizar.
+db.getName()
+db.users.findOne({ _id: ObjectId('<id-da-conta-local>') }, { name: 1, email: 1, role: 1 })
+db.users.updateOne(
+  { _id: ObjectId('<id-da-conta-local>'), role: 'customer', isActive: true },
+  { $set: { role: 'admin' }, $unset: { refreshTokenHash: 1 } }
+)
+```
+
+Confirme `matchedCount: 1`, feche o acesso administrativo ao banco e faça novo
+login no painel. Não exponha o MongoDB à internet nem reutilize usuários/senhas de
+produção. Esse procedimento é manual e **não foi executado** pela implementação.
+
+### Fluxos disponíveis
+
+- Login, acesso restrito, renovação coordenada, expiração e logout.
+- Visão geral com totais retornados em `pagination.totalItems`, atalhos e cinco
+  pedidos recentes. Não há métricas de faturamento calculadas sobre páginas.
+- Produtos: paginação, busca, ordenação, filtros, criação, edição e exclusão
+  confirmada. Inclui preços em reais com até duas casas decimais, estoque inteiro,
+  dimensões em kg/cm, categoria, tags, especificações, destaque e ativação.
+  Categoria é selecionada com busca e paginação, inclusive além de 100 registros.
+- Categorias: busca, paginação, ordenação, criação, edição, ordem de exibição,
+  ativação e exclusão com apresentação de bloqueio por produtos vinculados.
+- Imagens: um arquivo por requisição multipart, preview com liberação de URL,
+  alt, principal, ordem por lista completa de UUIDs e remoção confirmada. Botões
+  de mover antes/depois permitem ordenar pelo teclado. A imagem de categoria
+  continua visível durante a substituição. Limites do cliente não substituem a
+  validação binária, de animação e de dimensões feita no servidor.
+- Conflitos de imagens 409 recarregam o estado sem repetir ações; mensagens
+  distinguem concorrência, limite e migração necessária. Legados sem IDs ficam
+  bloqueados para edição. Não há migração pela interface. A política de retenção
+  existente é explicitada antes de remover/substituir imagens.
+- Pedidos: paginação, filtros, detalhes de cliente, snapshots, endereço, frete,
+  valores, estados e histórico. Apenas transições permitidas são mostradas.
+  Pagamentos integrados não podem ser alterados manualmente nem cancelados.
+  Alterações financeiras de pedidos legados são registros locais, com confirmação
+  explícita; não executam cobrança ou reembolso no provedor.
+
+Formulários mantêm entradas em falhas, bloqueiam envio duplicado e avisam antes
+de abandonar alterações ou fechar a página. Consultas são canceladas ao sair da
+tela e respostas obsoletas são ignoradas. Estados vazio, carregando, indisponível,
+erro e sucesso são explícitos. Confirmações destrutivas usam o diálogo nativo do
+navegador, com gerenciamento de foco e teclado nativos. Labels, mensagens
+associadas aos campos, foco visível, atalho para o conteúdo e layout responsivo
+foram implementados. A navegação é interna ao painel; não há URLs individuais ou
+histórico de rotas, e recarregar retorna ao login por decisão de sessão.
+
+### Extensão mínima do contrato de pedidos
+
+Os detalhes em `GET /api/v1/admin/orders/:orderId` e as respostas das duas
+transições administrativas agora incluem:
+
+```json
+{
+  "allowedActions": {
+    "statuses": ["confirmed", "cancelled"],
+    "paymentStatuses": ["paid", "failed"],
+    "paymentManagedExternally": false
+  }
+}
+```
+
+O exemplo representa um pedido pendente sem pagamento integrado. Esses valores
+vêm das mesmas tabelas usadas para autorizar transições no servidor. Com Mercado
+Pago, `paymentStatuses` é vazio, `cancelled` é omitido e
+`paymentManagedExternally` é verdadeiro. Estados terminais retornam listas vazias.
+Esse campo existe apenas nos detalhes administrativos, protegidos por admin;
+nenhuma credencial, chave idempotente ou identificador de pagamento é exposto.
+A checagem efetiva e o controle de concorrência continuam na mutação do backend;
+as permissões podem mudar entre leitura e envio. Não foram alteradas regras
+financeiras, estoque, estados, endpoints ou formatos de erro existentes.
+
+### Verificações e testes do painel
+
+```bash
+npm run check --prefix frontend
+npm test --prefix frontend
+npm run build --prefix frontend
+npm run check
+npm test
+git diff --check
+```
+
+Vitest foi reaproveitado como executor, com configuração independente no frontend.
+Testing Library e user-event exercitam formulários e navegação pelo DOM/teclado;
+jsdom fornece o DOM sem navegador e jest-dom as asserções de acessibilidade.
+Prettier mantém a formatação dos novos arquivos e permite verificá-la com
+`npm run format:check --prefix frontend` (ou aplicar com `npm run format --prefix frontend`).
+Essas dependências são somente de desenvolvimento. A configuração Vitest da raiz
+foi limitada a `backend/tests/**/*.test.js`, evitando que testes do frontend
+inicializem MongoDB ou recebam o setup do backend.
+
+As suítes frontend usam mocks controlados e bloqueiam `fetch` por padrão, sem API,
+banco ou provedores reais. As suítes backend continuam exclusivamente com
+mongodb-memory-server e o bloqueio de HTTP externo original. Não inicie
+`server.js` nos testes. O sandbox pode exigir autorização para abrir as portas do
+MongoDB temporário; isso não autoriza usar o banco do `.env`.
+
+Os testes automatizados verificam sessão, renovação simultânea, ausência de loops,
+restrição admin, logout, cancelamento de consultas, filtros/paginação, criação e
+edição, erros por campo, dados preservados, duplicidade de envio, imagens multipart,
+rejeições, principal/alt/ordem/remoção, conflitos 409, categorias vinculadas,
+snapshots e ações de pedidos. jsdom não valida renderização visual, contraste
+medido ou comportamento real do diálogo nativo. Não havia ferramenta de navegador
+nesta sessão: os fluxos não foram validados manualmente em navegador desktop ou
+celular. Nenhum upload ou pagamento real foi executado.

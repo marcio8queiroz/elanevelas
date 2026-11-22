@@ -6,13 +6,7 @@ import {
   adminOrderDetailResponse, adminOrderSummaryResponse, orderDetailResponse, orderSummaryResponse,
 } from '../utils/orderResponse.js';
 
-const ORDER_TRANSITIONS = {
-  pending: ['confirmed', 'cancelled'], confirmed: ['processing', 'cancelled'],
-  processing: ['shipped', 'cancelled'], shipped: ['delivered'], delivered: [], cancelled: [],
-};
-const PAYMENT_TRANSITIONS = {
-  pending: ['paid', 'failed'], paid: ['refunded'], failed: ['pending'], refunded: [],
-};
+import { ORDER_TRANSITIONS, PAYMENT_TRANSITIONS } from '../utils/orderActions.js';
 
 const pagination = (page, limit, totalItems) => ({
   page, limit, totalItems, totalPages: Math.ceil(totalItems / limit),

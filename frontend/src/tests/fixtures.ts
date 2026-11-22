@@ -1,0 +1,97 @@
+import type { Category, Product, Order, Pagination } from '../api/types';
+export const category: Category = {
+  _id: '000000000000000000000001',
+  name: 'Aromáticas',
+  slug: 'aromaticas',
+  description: 'Coleção',
+  isActive: true,
+  sortOrder: 0,
+};
+export const product: Product = {
+  _id: '000000000000000000000002',
+  name: 'Vela Lavanda',
+  slug: 'vela-lavanda',
+  sku: 'LAV',
+  description: 'Vela artesanal',
+  shortDescription: 'Suave',
+  category,
+  fragrance: 'Lavanda',
+  price: 45.9,
+  promotionalPrice: null,
+  stock: 8,
+  lowStockThreshold: 5,
+  shipping: { weightKg: 0.3, heightCm: 8, widthCm: 7, lengthCm: 7 },
+  specifications: { waxType: 'Vegetal' },
+  tags: ['natural'],
+  isActive: true,
+  isFeatured: false,
+  images: [],
+};
+export const pagination: Pagination = {
+  page: 1,
+  limit: 10,
+  totalItems: 1,
+  totalPages: 1,
+  hasNextPage: false,
+  hasPreviousPage: false,
+};
+export const pictures = [
+  {
+    id: 'd913dca9-578e-45d8-aab5-96a9efc36320',
+    url: 'https://example.com/one.webp',
+    alt: 'Primeira',
+    isMain: true,
+  },
+  {
+    id: '4778e5ad-cc2e-4ed8-8635-010c732bd99b',
+    url: 'https://example.com/two.webp',
+    alt: 'Segunda',
+    isMain: false,
+  },
+];
+export const order: Order = {
+  id: '000000000000000000000003',
+  orderNumber: 'EV-EXEMPLO',
+  status: 'pending',
+  paymentStatus: 'pending',
+  paymentMethod: 'pix',
+  customer: { id: 'u', name: 'Cliente de teste', email: 'cliente@example.com' },
+  subtotal: 45.9,
+  shippingAmount: 10,
+  discountAmount: 0,
+  total: 55.9,
+  createdAt: '2026-01-01T12:00:00Z',
+  updatedAt: '2026-01-01T12:00:00Z',
+  shippingAddress: {
+    recipientName: 'Cliente de teste',
+    street: 'Rua Exemplo',
+    number: '1',
+    neighborhood: 'Centro',
+    city: 'Cidade de teste',
+    state: 'AM',
+    zipCode: '00000-000',
+  },
+  shipping: {
+    provider: 'melhor_envio',
+    serviceId: '1',
+    serviceName: 'PAC',
+    price: 10,
+    estimatedDays: 4,
+  },
+  items: [
+    {
+      productId: product._id,
+      name: 'Nome no snapshot',
+      sku: 'LAV',
+      quantity: 1,
+      unitPrice: 45.9,
+      lineTotal: 45.9,
+    },
+  ],
+  statusHistory: [{ type: 'order', status: 'pending', changedAt: '2026-01-01T12:00:00Z' }],
+  allowedActions: {
+    statuses: ['confirmed', 'cancelled'],
+    paymentStatuses: ['paid', 'failed'],
+    paymentManagedExternally: false,
+  },
+};
